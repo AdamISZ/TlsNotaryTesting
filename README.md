@@ -9,6 +9,8 @@ add extension to TLSNotary's Firefox
 
 In order for uninterrupted running, modify the tlsnotary extension code to disable the alert windows.
 
+In tlsnotary.xul, change the "oncommand" events for the buttons to "onclick".
+
 To signal readiness for keyboard input, add the line: help.value = "Beginning the data transfer using sendspace.com...";
 as indicated below in script.js: 
 
