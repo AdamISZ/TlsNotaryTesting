@@ -1,16 +1,15 @@
 var mainWindow;
 var auditeeBrowser;
 var bHelpUpdate = false;
-var tlsnLinkReady = true;
-var tlsnStopReady = false;
-var tlsnLinkVisitedCounter = 0;
 var tlsnGetUrlsResponded = false;
 var reqGetUrls;
-
+var tlsnLoadListener;
  var linkArray;
 var tlsnCipherSuiteList;
+var tlsnLinkIndex=0;
 
 var tlsnCipherSuiteNames=["security.ssl3.rsa_aes_128_sha","security.ssl3.rsa_aes_256_sha","security.ssl3.rsa_rc4_128_md5","security.ssl3.rsa_rc4_128_sha"]
+
 
 function tlsnSimulateClick(what_to_click) {
   var event = new MouseEvent('click', {
@@ -34,6 +33,31 @@ function tlsnInitTesting(){
 
     auditeeBrowser = mainWindow.gBrowser
 
+    //required to allow silent close of all other tabs
+    Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefService).setBoolPref("browser.tabs.warnOnCloseOtherTabs", false);
+
+    //need a progress listener to signal when initial page load completes:
+    //copied from https://developer.mozilla.org/en-US/docs/Code_snippets/Progress_Listeners
+    const STATE_STOP = Ci.nsIWebProgressListener.STATE_STOP;
+    const STATE_IS_WINDOW = Ci.nsIWebProgressListener.STATE_IS_WINDOW;
+    //wait for complete load of page before starting to record.
+    tlsnLoadListener = {
+        QueryInterface: XPCOMUtils.generateQI(["nsIWebProgressListener",
+                                               "nsISupportsWeakReference"]),
+
+        onStateChange: function(aWebProgress, aRequest, aFlag, aStatus) {
+            if ((aFlag & STATE_STOP) && (aFlag & STATE_IS_WINDOW) && (aWebProgress.DOMWindow == aWebProgress.DOMWindow.top)) {
+                // This fires when the load finishes
+                auditeeBrowser.removeProgressListener(this);
+                setTimeout(tlsnRecord, 2000);
+            }
+        },
+        onLocationChange: function(aProgress, aRequest, aURI) {},
+        onProgressChange: function(aWebProgress, aRequest, curSelf, maxSelf, curTot, maxTot) {},
+        onStatusChange: function(aWebProgress, aRequest, aStatus, aMessage) {},
+        onSecurityChange: function(aWebProgress, aRequest, aState) {}
+    }
+
     //ask the back end for a list of websites to visit
     reqGetUrls = new XMLHttpRequest();
     reqGetUrls.onload = responseGetUrls;
@@ -44,11 +68,13 @@ function tlsnInitTesting(){
     return;
 
 }
+
 function responseGetUrls(iteration){
     if (typeof iteration == "number"){
     //give 5 secs for backend to respond
         if (iteration > 5){
-            alert("responseGetUrls timed out");
+            //use an alert rather than messaging the backend, since that's exactly what's failing
+            alert("responseGetUrls timed out - python backend not responding. please investigate.");
             return;
         }
         if (!tlsnGetUrlsResponded) setTimeout(responseGetUrls, 1000, ++iteration)
@@ -60,18 +86,14 @@ function responseGetUrls(iteration){
     var query = reqGetUrls.getResponseHeader("response");
 
     if (query !== "get_websites"){
+        //use an alert rather than messaging the backend, since that's exactly what's failing
         alert("Error - wrong response query header: "+query);
         return;
     }
 
     var tlsnUrlList = reqGetUrls.getResponseHeader("url_list");
-    //alert("This:"+tlsnUrlList);
     var cipherSuiteList = reqGetUrls.getResponseHeader("cs_list");
     linkArray = tlsnUrlList.split(',');
-    //alert("LA:"+linkArray)
-    //alert("Link array 2"+linkArray[2]);
-    //alert("Link array 7"+linkArray[7]);
-
     tlsnCipherSuiteList = cipherSuiteList.split(',');
 
     //urls received, start the connection over IRC
@@ -79,55 +101,44 @@ function responseGetUrls(iteration){
     tlsnSimulateClick(btn);
 
     //wait for status bar to show readiness.
-    setTimeout(respondToHelpUpdate,1000,0);
+    setTimeout(tlsnOpenLink,1000,0);
 }
 
-function respondToHelpUpdate(iteration){
+function tlsnSendErrorMsg(errmsg){
+    var reqSendError = new XMLHttpRequest();
+    reqSendError.open("HEAD", "http://127.0.0.1:27777"+"/log_error?errmsg="+errmsg, true);
+    reqSendError.send();
+    return;
+}
+
+function tlsnOpenLink(iteration){
 
     var help = document.getElementById("help").value;
 
+    if (help.lastIndexOf("ERROR",0) == 0){
+        tlsnSendErrorMsg("Error received in browser: "+help);
+    }
+
     if (help.lastIndexOf("Navigat",0) !== 0){
         if (typeof iteration == "number"){
-        //give 5 secs for backend to respond
-            if (iteration > 40){
-                alert("respondToHelpUpdate timed out");
+        //give 200 secs for backend to respond (occasionally, servers are slow. better to just wait).
+            if (iteration > 200){
+                tlsnSendErrorMsg("Open link waiting for the Navigate message timed out");
                 return;
             }
-            setTimeout(respondToHelpUpdate, 1000, ++iteration);
+            setTimeout(tlsnOpenLink, 1000, ++iteration);
             return;
         }
     }
 
-    //we open all tabs, but not simultaneously (crude boolean locks
-    //to force each link to wait for the previous)
-    var linkArrayLength = linkArray.length ;
-    for (var i=0;i<linkArrayLength;i++){
-        var argsList = [linkArray[i],tlsnCipherSuiteList[i]];
-        setTimeout(tlsnOpenLink,1000*i,argsList);
-    }
-
-    //another crude boolean lock will force the stop record
-    //action to wait until all recordings are finished.
-    setTimeout(tlsnStopRecord,1000);
-}
-
-
-setTimeout(tlsnInitTesting,1000);
-
-function tlsnOpenLink(args){
-
-    //a hack to open links synchronously
-    if (tlsnLinkReady !== true){
-        setTimeout(tlsnOpenLink,1000,args);
+    if (tlsnLinkIndex > linkArray.length -1){
+        setTimeout(tlsnStopRecord,1000);
         return;
     }
-    //grab the "lock"
-    tlsnLinkReady = false;
-
 
     //set the cipher suite to be ONLY that in the given argument
     var prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefService);
-    var cs_int = parseInt(args[1]);
+    var cs_int = parseInt(tlsnCipherSuiteList[tlsnLinkIndex]);
     for (var i=0;i<4;i++){
         if (i==cs_int){
             prefs.setBoolPref(tlsnCipherSuiteNames[i], true);
@@ -137,52 +148,23 @@ function tlsnOpenLink(args){
         }
     }
 
-    //alert("With website: "+args[0]+", using cipher suite: "+args[1]);
-
-    auditeeBrowser.selectedTab = auditeeBrowser.addTab(args[0]);
-    setTimeout(tlsnRecord,6000);//TODO need to catch initial page load completion?
+    auditeeBrowser.selectedTab = auditeeBrowser.addTab(linkArray[tlsnLinkIndex]);
+    auditeeBrowser.removeAllTabsBut(auditeeBrowser.selectedTab);
+    auditeeBrowser.addProgressListener(tlsnLoadListener);
+    tlsnLinkIndex++;
+    document.getElementById("help").value = "Loading page...";
+    setTimeout(tlsnOpenLink,1000,0);
 
 }
+
+setTimeout(tlsnInitTesting,1000);
 
 function tlsnRecord(){
     var btn = document.getElementById("button_record_enabled");
     tlsnSimulateClick(btn);
-    setTimeout(respondToHelpUpdate2,1000,0);
-
 }
-
-function respondToHelpUpdate2(iteration){
-
-    var help = document.getElementById("help").value;
-
-    if (help.lastIndexOf("Navigat",0) !== 0){
-        if (typeof iteration == "number"){
-        //give 5 secs for backend to respond
-            if (iteration > 60){
-                alert("responseHelpUpdate2 timed out");
-                return;
-            }
-            setTimeout(respondToHelpUpdate2, 1000, ++iteration);
-            return;
-        }
-    }
-    //we get here if the addon bar status says "Navigating to.."
-    //which means the recording function has finished.
-    tlsnLinkReady = true;
-    tlsnLinkVisitedCounter++;
-    if (tlsnLinkVisitedCounter == linkArray.length){
-        tlsnStopReady = true;
-    }
-
-}
-
 
 function tlsnStopRecord(){
-    if (tlsnStopReady !== true){
-        setTimeout(tlsnStopRecord,1000);
-        return;
-    }
-
     //reset prefs for file transfer
     var prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefService);
     for (var i=0;i<4;i++){
@@ -240,6 +222,4 @@ function tlsnWaitForAuditCompletion(iteration){
     //finished; there will be no response
 
 }
-
-
 
