@@ -113,17 +113,23 @@ function tlsnSendErrorMsg(errmsg){
 
 function tlsnOpenLink(iteration){
 
-    var help = document.getElementById("help").value;
+    var helpmsg = document.getElementById("help").value;
 
-    if (help.lastIndexOf("ERROR",0) == 0){
-        tlsnSendErrorMsg("Error received in browser: "+help);
+    if (helpmsg.indexOf("ERR") == 0){
+        tlsnSendErrorMsg("Error received in browser: "+helpmsg +
+                         "for site: "+linkArray[tlsnLinkIndex-1] +
+                         " and cipher suite: "+tlsnCipherSuiteNames[tlsnCipherSuiteList[tlsnLinkIndex-1]]);
+        return; //give up
     }
 
-    if (help.lastIndexOf("Navigat",0) !== 0){
+    if (helpmsg.indexOf("Navigat",0) !== 0){
         if (typeof iteration == "number"){
-        //give 200 secs for backend to respond (occasionally, servers are slow. better to just wait).
+        //give 200 secs for backend to respond (occasionally, servers are slow. better to just wait
+        //than to needlessly corrupt an entire test).
             if (iteration > 200){
-                tlsnSendErrorMsg("Open link waiting for the Navigate message timed out");
+                tlsnSendErrorMsg("Timed out waiting for page load complete, for site: "
+                                 +linkArray[tlsnLinkIndex-1]+" and cipher suite: "+
+                                 tlsnCipherSuiteNames[tlsnCipherSuiteList[tlsnLinkIndex-1]]);
                 return;
             }
             setTimeout(tlsnOpenLink, 1000, ++iteration);
@@ -177,11 +183,11 @@ function tlsnStopRecord(){
 }
 
 function tlsnReceiveKeyboardInput(iteration){
-    var help = document.getElementById("help").value;
-    if (help.lastIndexOf("Beginning the data transfer",0) !== 0){
+    var helpmsg = document.getElementById("help").value;
+    if (helpmsg.indexOf("Beginning the data transfer",0) !== 0){
         //give 40 secs for backend to respond
         if (iteration > 40){
-                alert("tlsnReceiveKeyboardInput timed out");
+                tlsnSendErrorMsg("Timed out waiting to receive input from the keyboard to select the trace file.");
                 return;
          }
          setTimeout(tlsnReceiveKeyboardInput, 1000, ++iteration);
@@ -200,13 +206,13 @@ function tlsnReceiveKeyboardInput(iteration){
 }
 
 function tlsnWaitForAuditCompletion(iteration){
-    var help = document.getElementById("help").value;
+    var helpmsg = document.getElementById("help").value;
 
-    if (help.lastIndexOf("Auditing",0) !== 0){
+    if (helpmsg.indexOf("Auditing",0) !== 0){
         if (typeof iteration == "number"){
         //give 60 secs for backend to respond
             if (iteration > 60){
-                alert("tlsnWaitForAuditCompletion timed out");
+                tlsnSendErrorMsg("Timed out waiting for tlsnotary to indicate successful completion of file transfer (and audit).");
                 return;
             }
             setTimeout(tlsnWaitForAuditCompletion, 1000, ++iteration);

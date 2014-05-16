@@ -1,17 +1,12 @@
 #!/usr/bin/env python
 from __future__ import print_function
 
-import base64
 import BaseHTTPServer
-import binascii
-import codecs
 import hashlib
-import hmac
 import os
 import platform
 import Queue
 import random
-import re
 import select
 import shutil
 import signal
@@ -22,6 +17,7 @@ import sys
 import threading
 import time
 import urllib2
+import urllib
 import zipfile
  
 installdir = os.path.dirname(os.path.realpath(__file__))
@@ -133,7 +129,7 @@ class HandlerClass(SimpleHTTPServer.SimpleHTTPRequestHandler):
             if not arg_str.startswith('errmsg='):
                 raise Exception("Received erroneous request from testing frontend")
             err_msg = arg_str[len('errmsg='):]
-            log_to_file("Front end sent error condition: "+err_msg,p=True)
+            log_to_file("Front end sent error condition: "+urllib.unquote(err_msg),p=True)
 
         if self.path.startswith('/end_test'):
             perform_final_check();
@@ -230,23 +226,44 @@ def start_run():
             acceptable_ciphersuites = code.split(',')
             #choose one of the given numbers at random
             cs_list.append(random.choice(acceptable_ciphersuites))
-    log_to_file("***************************************")
+    log_to_file("*********START TEST*****************")
     log_to_file("Starting new run for these websites:")
     log_to_file(','.join(website_list))
     log_to_file("and these cipher suites:")
     log_to_file(','.join(cs_list))
-    log_to_file("***************************************")
+    log_to_file("************************************")
 
 
+def start_auditor(parentthread):
+    print ("Starting the auditor")
+    #initiate an auditor window in daemon mode
+    subprocess.check_output(['python','tlsnotary-auditor.py','daemon'])
+
+def start_auditee(parentthread):
+    print ("Starting the auditee")
+    subprocess.check_output(['python','tlsnotary-auditee.py'])
 
 if __name__ == "__main__":
 
     global website_list_file
     website_list_file = sys.argv[1]
 
+    #start auditor
+    thread_auditor = ThreadWithRetval(target= start_auditor)
+    thread_auditor.daemon = True
+    thread_auditor.start()
+
+    time.sleep(2.0)
+    #start auditee
+    thread_auditee = ThreadWithRetval(target= start_auditee)
+    thread_auditee.daemon = True
+    thread_auditee.start()
+
+    #start backend http server
     thread = ThreadWithRetval(target= minihttp_thread)
     thread.daemon = True
     thread.start()
+
     #wait for minihttpd thread to indicate its status and FF_to_backend_port  
     bWasStarted = False
     for i in range(10):
@@ -266,8 +283,6 @@ if __name__ == "__main__":
     if bWasStarted == False:
         print ('minihttpd failed to start in 10 secs. Please investigate')
         exit(MINIHTTPD_START_TIMEOUT)
-
-    FF_to_backend_port = thread.retval[1]
 
     while True:
         time.sleep(3)
